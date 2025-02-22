@@ -229,7 +229,7 @@ def main(argv):
         description="Enter a text query and the number of results you want to get. The system will search the documents for the best results and automatically sort them.",
     )
 
-    demo.launch(server_name="0.0.0.0", share=True)
+    demo.launch(server_name="0.0.0.0", server_port=40001, share=False)
 
 if __name__ == '__main__':
     app.run(main)
