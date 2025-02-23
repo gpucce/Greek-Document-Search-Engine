@@ -3,12 +3,24 @@ from absl import app
 from absl import flags
 from ml_collections.config_flags import config_flags
 import os
+import oimdp
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 import json
-from utils.index_utils import extract_texts, extract_sentences_from_texts, encode_sentences
+from utils.index_utils import (
+    parse_tlg_dataset_folder_structure,
+    parse_openiti_dataset_folder_structure,
+    parse_hadith_dataset_folder_structure,
+    extract_tlg_texts,
+    extract_openiti_texts,
+    extract_hadith_texts,
+    extract_sentences_from_texts,
+    encode_sentences
+)
+
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 import torch
+import oimdp
 from transformers import pipeline
 import faiss
 import pandas as pd
@@ -18,10 +30,6 @@ import sqlite3
 FLAGS = flags.FLAGS
 config_flags.DEFINE_config_file("config", None, "configuration.", lock_config=True)
 flags.mark_flags_as_required(["config"])
-
-
-
-
 
 def main(argv):
     H = FLAGS.config
@@ -49,7 +57,6 @@ def main(argv):
         # Se non esiste, crea un nuovo indice
         index = faiss.IndexFlatL2(H.data.len_embedding)
         print("New index created.")
-    
 
     #create or open db
     path_to_save_db = os.path.join(H.db.db_path,f"{H.db.db_name}.db")
@@ -62,60 +69,61 @@ def main(argv):
     cursor = connection.cursor()
     cursor.execute(f"CREATE TABLE IF NOT EXISTS {H.db.db_name} (row_id INTEGER PRIMARY KEY AUTOINCREMENT, author_id TEXT, id TEXT, name TEXT, sentence TEXT, citations TEXT, book_name TEXT)")
 
-    num_current_folder = 1   
-    for folder_name in os.listdir(json_dataset_path):
-        folder_path = os.path.join(json_dataset_path, folder_name)
+    if H.data.dataset_type == "greek_tlg":
+        data_path_generator = parse_tlg_dataset_folder_structure(json_dataset_path)
+    elif H.data.dataset_type == "arabic_openiti":
+        data_path_generator = parse_openiti_dataset_folder_structure(json_dataset_path)
+    elif H.data.dataset_type == "hadith":
+        data_path_generator = parse_hadith_dataset_folder_structure(json_dataset_path)
+    else:
+        raise ValueError(f"Invalid dataset type {H.data.dataset_typ}.")
 
-        # check if  is a directory
-        if os.path.isdir(folder_path):
-            print(f"[{num_current_folder}/{len(os.listdir(json_dataset_path))}] Author: {folder_name}")
+    for file_path, file_name, folder_name, num_current_folder in data_path_generator:
+        # Check if is a JSON file
+        print(f"    JSON: {file_name}")
 
-            # if not (folder_name == "Himerius Soph. (2051)"):
-            #      continue
+        # Leggi il contenuto del file JSON
+        if H.data.dataset_type == "greek_tlg":
+            with open(file_path, "r", encoding="utf-8") as json_file:
+                #get json data
+                data = json.load(json_file)
+                #extract all text fields
+            texts, citations = extract_tlg_texts(data)
 
-            # Iterate on each json file
-            for file_name in os.listdir(folder_path):
-                file_path = os.path.join(folder_path, file_name)
+        elif H.data.dataset_type == "arabic_openiti":
+            with open(file_path, "r", encoding="utf-8") as oimdp_file:
+                data = oimdp.parse(oimdp_file.read())
+            texts, citations = extract_openiti_texts(data)
 
-                # Check if is a JSON file
-                if file_name.endswith(".json"):
-                    print(f"    JSON: {file_name}")
-                    # if not (file_name == "001.json"):
-                    #     continue
+        elif H.data.dataset_type == "hadith":
+            with open(file_path, "r", encoding="utf-8") as oimdp_file:
+                data = oimdp.parse(oimdp_file.read())
+            texts, citations = extract_hadith_texts(data)
 
-                    # Leggi il contenuto del file JSON
-                    #try:
-                    with open(file_path, "r", encoding="utf-8") as json_file:
+        else:
+            raise ValueError(f"Invalid dataset type {H.data.dataset_typ}.")
 
-                        #get json data
-                        data = json.load(json_file)
+        #join texts into a single sentence if they semantically belong together
+        sentences, citations = extract_sentences_from_texts(texts, citations, mask_filler, H.data.min_words_in_phrase, H.model.model_max_length, tokenizer )
 
-                        #extract all text fields
-                        texts, citations = extract_texts(data)
+        #get encoding of each sentence
+        sentence_embeddings = encode_sentences(sentences, model, tokenizer, H.data.len_embedding, device, H.model.model_max_length)
 
-                        #join texts into a single sentence if they semantically belong together
-                        sentences, citations = extract_sentences_from_texts(texts, citations, mask_filler, H.data.min_words_in_phrase, H.model.model_max_length, tokenizer )
+        #add embeddings to index
+        faiss.normalize_L2(sentence_embeddings)
+        index.add(sentence_embeddings)
 
-                        #get encoding of each sentence
-                        sentence_embeddings = encode_sentences(sentences, model, tokenizer, H.data.len_embedding, device, H.model.model_max_length)
+        #save data to db (NB: if FAISS USE INDEX K FOR A SENTENCE, SQLITE USE INDEX (K+1))
+        for idx, sentence in enumerate(sentences):
+                cursor.execute(f"""
+                                    INSERT INTO {H.db.db_name} (author_id, id, name, sentence, citations, book_name)
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                """, (data['author_id'], data['id'], data['name'], sentence, str(citations[idx]), folder_name))
+        connection.commit()
+        #save index
+        faiss.write_index(index, path_to_save_index)
 
-                        #add embeddings to index
-                        faiss.normalize_L2(sentence_embeddings)
-                        index.add(sentence_embeddings)
-                        
-                        #save data to db (NB: if FAISS USE INDEX K FOR A SENTENCE, SQLITE USE INDEX (K+1))
-                        for idx, sentence in enumerate(sentences):
-                                cursor.execute(f"""
-                                                    INSERT INTO {H.db.db_name} (author_id, id, name, sentence, citations, book_name) 
-                                                    VALUES (?, ?, ?, ?, ?, ?)
-                                                """, (data['author_id'], data['id'], data['name'], sentence, str(citations[idx]), folder_name))
-                        connection.commit()
-                        #save index
-                        faiss.write_index(index, path_to_save_index)
 
-                    # except Exception as e:
-                    #     print(f"    Error opening file {file_name}: {e}")
-            num_current_folder+=1
     connection.close()
 
 

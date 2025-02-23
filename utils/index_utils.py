@@ -1,11 +1,31 @@
-
-import torch
 import re
+import os
+import torch
 import numpy as np
+import oimdp
+
+from arabert.preprocess import ArabertPreprocessor
+model_name="bert-base-arabertv2"
+arabert_prep = ArabertPreprocessor(model_name=model_name)
 
 
+def parse_tlg_dataset_folder_structure(json_dataset_path):
+    num_current_folder = 1
+    for folder_name in os.listdir(json_dataset_path):
+        folder_path = os.path.join(json_dataset_path, folder_name)
 
-def extract_texts(data):
+        # check if  is a directory
+        if os.path.isdir(folder_path):
+            print(f"[{num_current_folder}/{len(os.listdir(json_dataset_path))}] Author: {folder_name}")
+
+            # Iterate on each json file
+            for file_name in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file_name)
+                if file_name.endswith(".json"):
+                    yield file_path, file_name, folder_name, num_current_folder
+            num_current_folder += 1
+
+def extract_tlg_texts(data):
     texts = []
     citations = []
 
@@ -22,7 +42,96 @@ def extract_texts(data):
 
     return texts, citations
 
+def parse_hadith_dataset_folder_structure(json_dataset_path):
+    num_current_folder = 1
+    for folder_name in sorted(os.listdir(json_dataset_path)):
+        folder_path = os.path.join(json_dataset_path, folder_name)
+        if not os.path.isdir(folder_path):
+            continue
+        sorted_paths = sorted(os.listdir(folder_path))
 
+        # check if  is a directory
+        if sorted_paths:
+            print(f"[{num_current_folder}/{len(os.listdir(json_dataset_path))}] Author: {folder_name}")
+
+            # Iterate on each json file
+            for second_folder_name in sorted_paths:
+                second_folder_path = os.path.join(folder_path, second_folder_name)
+                if os.path.isfile(second_folder_path):
+                    if (second_folder_path.endswith("ara1") or second_folder_path.endswith("ara1.mARkdown")) or (second_folder_path.endswith("ara1") or second_folder_path.endswith("ara1.txt")):
+                        yield second_folder_path, second_folder_name, folder_name, num_current_folder
+                    continue
+                sorted_second_paths = sorted(os.listdir(second_folder_path))
+
+                for third_folder_name in sorted_second_paths:
+                    third_folder_path = os.path.join(second_folder_path, third_folder_name)
+                    if not os.path.isdir(third_folder_path):
+                        continue
+                    third_paths = [x for x in os.listdir(third_folder_path)]
+                    sorted_third_paths = sorted(third_paths, key=lambda x: int(x[:4]))
+
+                    for file_name in sorted_third_paths:
+                        file_path = os.path.join(third_folder_path, file_name)
+                        yield file_path, file_name, folder_name, num_current_folder
+            num_current_folder += 1
+
+def parse_openiti_dataset_folder_structure(json_dataset_path):
+    num_current_folder = 1
+    for folder_name in sorted([i for i in os.listdir(json_dataset_path) if i != "fonti_arabo_wp8"], key=lambda x: int(x[:4])):
+        folder_path = os.path.join(json_dataset_path, folder_name, "data")
+        sorted_paths = sorted(os.listdir(folder_path), key=lambda x: int(x[:4]))
+
+        # check if  is a directory
+        if sorted_paths:
+            print(f"[{num_current_folder}/{len(os.listdir(json_dataset_path))}] Author: {folder_name}")
+
+            # Iterate on each json file
+            for second_folder_name in sorted_paths:
+                second_folder_path = os.path.join(folder_path, second_folder_name)
+                sorted_second_paths = sorted(os.listdir(second_folder_path), key=lambda x: int(x[:4]))
+
+                for third_folder_name in sorted_second_paths:
+                    third_folder_path = os.path.join(second_folder_path, third_folder_name)
+                    if not os.path.isdir(third_folder_path):
+                        continue
+                    third_paths = [x for x in os.listdir(third_folder_path) if x.endswith("ara1") or x.endswith("ara1.mARkdown")]
+                    sorted_third_paths = sorted(third_paths, key=lambda x: int(x[:4]))
+
+                    for file_name in sorted_third_paths:
+                        file_path = os.path.join(third_folder_path, file_name)
+                        yield file_path, file_name, folder_name, num_current_folder
+            num_current_folder += 1
+
+
+def postprocess_openiti(text):
+    if "Vol." in text:
+        text = text.split("Vol.")[0]
+    text = arabert_prep.preprocess(text)
+    return text.strip()
+
+def extract_hadith_texts(data):
+    out = []
+    lines = []
+    for text_chunk in data.content:
+        if not isinstance(text_chunk, oimdp.structures.Paragraph):
+
+            try:
+                lines.append(str(text_chunk))
+            except:
+                continue
+
+        else:
+            if lines:
+                out.append(" ".join(lines))
+                lines = []
+    if lines:
+        out.append(" ".join(lines))
+
+    out = [postprocess_openiti(i) for i in out]
+    return out, None
+
+def extract_openiti_texts(data):
+    raise NotImplementedError("This function is not implemented yet")
 
 def merge_sentences_with_mask(sentence1, sentence2, tokenizer, with_mask=True, add_space_between_sentences=False,):
 

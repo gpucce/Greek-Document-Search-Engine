@@ -1,6 +1,5 @@
-
+# pylint: disable=pointless-string-statement
 from ml_collections import ConfigDict
-from ml_collections.config_dict import FieldReference
 
 def get_config():
     config = ConfigDict()

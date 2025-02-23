@@ -28,9 +28,9 @@ def get_config():
 
         So, json_dataset_path is the absolute path to 'dataset_name'
     '''
-    data.json_dataset_path = "/home/gpucce/Repos/arabo_panzeca/all_data/"
+    data.json_dataset_path = "/home/gpucce/Repos/arabo_panzeca/all_data/fonti_arabo_wp8"
     data.date_range = [600, 800]
-    data.dataset_type = "arabic_openiti"
+    data.dataset_type = "hadith"
 
     '''
     When creating the index, sentences are broken up into low and high points. However, some sentences, if broken up, do not make much sense on their own.
